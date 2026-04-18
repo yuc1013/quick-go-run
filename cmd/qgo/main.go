@@ -51,8 +51,7 @@ func parseArgs() {
 		}
 	}
 	if state.goFile == "" {
-		log.Printf("qgo: no .go files specified")
-		panic("")
+		panic("qgo: no .go files specified")
 	}
 }
 
