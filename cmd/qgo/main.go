@@ -64,9 +64,8 @@ func (pl *Pipeline) ParseArgs() {
 			break
 		}
 	}
-	if pl.goFile == "" {
-		log.Printf("qgo: no .go file specified")
-		panic("")
+	if state.goFile == "" {
+		panic("qgo: no .go files specified")
 	}
 
 	pl.finishedN += 1
