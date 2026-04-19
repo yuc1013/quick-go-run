@@ -10,28 +10,8 @@ import (
 	"strings"
 )
 
-func main() {
-	// Override default panic behavior
-	defer func() {
-		if r := recover(); r != nil {
-			log.Fatal(r)
-		}
-	}()
-
-	pl := NewPipeline()
-
-	// Trigger the logic chain in order
-	pl.ParseArgs()
-	pl.SetupTempWorkspace()
-	defer os.RemoveAll(pl.tempDir) // Clean up at the end
-	pl.SyncSource()
-	pl.PrepareDependencies()
-	pl.Compile()
-	pl.Execute()
-}
-
-// Pipeline process args to run the file
-type Pipeline struct {
+// EnvQgo process args to run the file
+type EnvQgo struct {
 	goFile     string
 	goFileIdx  int
 	tempDir    string
@@ -42,15 +22,16 @@ type Pipeline struct {
 	finishedN int
 }
 
-func NewPipeline() *Pipeline {
-	return &Pipeline{
-		totalN: 6,
+func NewEnvQgo() *EnvQgo {
+	return &EnvQgo{
+		finishedN: 0,
+		totalN:    6,
 	}
 }
 
 // 1. Parse and record argument state
-func (pl *Pipeline) ParseArgs() {
-	log.Printf("[%d/%d] qgo: Parsing args", pl.finishedN+1, pl.totalN)
+func ParseArgs(env *EnvQgo) {
+	log.Printf("[%d/%d] qgo: Parsing args", env.finishedN+1, env.totalN)
 
 	if len(os.Args) < 2 || (len(os.Args) >= 2 && os.Args[1] != "run") {
 		panic("Usage: qgo run [build flags] <file.go> [arguments...]")
@@ -58,46 +39,46 @@ func (pl *Pipeline) ParseArgs() {
 
 	for i, arg := range os.Args[2:] {
 		if strings.HasSuffix(arg, ".go") {
-			pl.goFile = arg
-			pl.goFileIdx = i + 2
+			env.goFile = arg
+			env.goFileIdx = i + 2
 			break
 		}
 	}
-	if pl.goFile == "" {
+	if env.goFile == "" {
 		panic("qgo: no .go files specified")
 	}
 
-	pl.finishedN += 1
+	env.finishedN += 1
 }
 
 // 2. Initialize environment
-func (pl *Pipeline) SetupTempWorkspace() {
-	log.Printf("[%d/%d] qgo: Setting up temp workspace", pl.finishedN+1, pl.totalN)
+func SetupTempWorkspace(env *EnvQgo) {
+	log.Printf("[%d/%d] qgo: Setting up temp workspace", env.finishedN+1, env.totalN)
 
 	var err error
-	pl.tempDir, err = os.MkdirTemp("", "qgo-*")
+	env.tempDir, err = os.MkdirTemp("", "qgo-*")
 	if err != nil {
 		panic(err)
 	}
 	// Note: because this is global pl. we clean it up at the end of main
 	// In real-world code, you might also call a cleanup function after execute
 
-	pl.finishedN += 1
+	env.finishedN += 1
 }
 
 // 3. Move source code
-func (pl *Pipeline) SyncSource() {
-	log.Printf("[%d/%d] qgo: Syncing source", pl.finishedN+1, pl.totalN)
+func SyncSource(env *EnvQgo) {
+	log.Printf("[%d/%d] qgo: Syncing source", env.finishedN+1, env.totalN)
 
-	pl.targetPath = filepath.Join(pl.tempDir, filepath.Base(pl.goFile))
+	env.targetPath = filepath.Join(env.tempDir, filepath.Base(env.goFile))
 
-	source, err := os.Open(pl.goFile)
+	source, err := os.Open(env.goFile)
 	if err != nil {
 		panic(err)
 	}
 	defer source.Close()
 
-	destination, err := os.Create(pl.targetPath)
+	destination, err := os.Create(env.targetPath)
 	if err != nil {
 		panic(err)
 	}
@@ -107,45 +88,45 @@ func (pl *Pipeline) SyncSource() {
 		panic(err)
 	}
 
-	pl.finishedN += 1
+	env.finishedN += 1
 }
 
 // 4. Run go mod
-func (pl *Pipeline) PrepareDependencies() {
-	log.Printf("[%d/%d] qgo: Preparing dependencies", pl.finishedN+1, pl.totalN)
+func PrepareDependencies(env *EnvQgo) {
+	log.Printf("[%d/%d] qgo: Preparing dependencies", env.finishedN+1, env.totalN)
 
-	pl.runInTemp("go", "mod", "init", "qgo/runtime")
+	env.runInTemp("go", "mod", "init", "qgo/runtime")
 	log.Printf(">> go mod resolving dependencies...")
-	pl.runInTemp("go", "mod", "tidy")
+	env.runInTemp("go", "mod", "tidy")
 
-	pl.finishedN += 1
+	env.finishedN += 1
 }
 
 // 5. Compile
-func (pl *Pipeline) Compile() {
-	log.Printf("[%d/%d] qgo: Compiling", pl.finishedN+1, pl.totalN)
+func Compile(env *EnvQgo) {
+	log.Printf("[%d/%d] qgo: Compiling", env.finishedN+1, env.totalN)
 
 	binaryName := "qgo_bin"
 	if filepath.Base(os.Args[0]) == "qgo_bin" {
 		binaryName = "qgo_bin_exec"
 	}
-	pl.binaryPath = filepath.Join(pl.tempDir, binaryName)
+	env.binaryPath = filepath.Join(env.tempDir, binaryName)
 
-	args := []string{"build", "-o", pl.binaryPath}
-	args = append(args, os.Args[2:pl.goFileIdx]...)
-	args = append(args, filepath.Base(pl.goFile))
+	args := []string{"build", "-o", env.binaryPath}
+	args = append(args, os.Args[2:env.goFileIdx]...)
+	args = append(args, filepath.Base(env.goFile))
 
-	pl.runInTemp("go", args...)
+	env.runInTemp("go", args...)
 
-	pl.finishedN += 1
+	env.finishedN += 1
 }
 
 // 6. Final execution
-func (pl *Pipeline) Execute() {
-	log.Printf("[%d/%d] qgo: Executing", pl.finishedN+1, pl.totalN)
+func Execute(env *EnvQgo) {
+	log.Printf("[%d/%d] qgo: Executing", env.finishedN+1, env.totalN)
 
-	appArgs := os.Args[pl.goFileIdx+1:]
-	cmd := exec.Command(pl.binaryPath, appArgs...)
+	appArgs := os.Args[env.goFileIdx+1:]
+	cmd := exec.Command(env.binaryPath, appArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
@@ -157,16 +138,36 @@ func (pl *Pipeline) Execute() {
 		panic(err)
 	}
 
-	pl.finishedN += 1
+	env.finishedN += 1
 }
 
 // Helper: run a command inside the temp directory
-func (pl *Pipeline) runInTemp(name string, args ...string) {
+func (env *EnvQgo) runInTemp(name string, args ...string) {
 	cmd := exec.Command(name, args...)
-	cmd.Dir = pl.tempDir
+	cmd.Dir = env.tempDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		panic(fmt.Sprintf("command failed: %s %s", name, strings.Join(args, " ")))
 	}
+}
+
+func main() {
+	// Override default panic behavior
+	defer func() {
+		if r := recover(); r != nil {
+			log.Fatal(r)
+		}
+	}()
+
+	env := NewEnvQgo()
+
+	// Trigger the logic chain in order
+	ParseArgs(env)
+	SetupTempWorkspace(env)
+	defer os.RemoveAll(env.tempDir) // Clean up at the end
+	SyncSource(env)
+	PrepareDependencies(env)
+	Compile(env)
+	Execute(env)
 }
