@@ -50,7 +50,6 @@ func NewPipeline() *Pipeline {
 
 // 1. Parse and record argument state
 func (pl *Pipeline) ParseArgs() {
-	// TODO: 打日志
 	log.Printf("[%d/%d] qgo: Parsing args", pl.finishedN+1, pl.totalN)
 
 	if len(os.Args) < 2 || (len(os.Args) >= 2 && os.Args[1] != "run") {
@@ -64,7 +63,7 @@ func (pl *Pipeline) ParseArgs() {
 			break
 		}
 	}
-	if state.goFile == "" {
+	if pl.goFile == "" {
 		panic("qgo: no .go files specified")
 	}
 
