@@ -7,8 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
-	"runtime"
 	"strings"
 )
 
@@ -23,23 +21,35 @@ func main() {
 	i := 0
 	n := 6
 
-	scall := func(sfunc func()) {
-		sptr := reflect.ValueOf(sfunc).Pointer()
-		sfull := runtime.FuncForPC(sptr)
-		log.Printf("[%d/%d] %s starting", i+1, n, sfull.Name())
-
-		sfunc()
-
-		i = i + 1
+	stepLog := func(info string) {
+		log.Printf("[%d/%d] qgo: %s", i+1, n, info)
 	}
 
-	scall(parseArgs)
-	scall(setupTempWorkspace)
+	stepLog("Parsing args")
+	parseArgs()
+	i++
+
+	stepLog("Setting up temp workspace")
+	setupTempWorkspace()
+	i++
+
 	defer os.RemoveAll(tempDir)
-	scall(syncSource)
-	scall(prepareDependencies)
-	scall(compile)
-	scall(execute)
+
+	stepLog("Syncing source")
+	syncSource()
+	i++
+
+	stepLog("Preparing dependencies")
+	prepareDependencies()
+	i++
+
+	stepLog("Compiling")
+	compile()
+	i++
+
+	stepLog("Executing")
+	execute()
+	i++
 }
 
 var (
