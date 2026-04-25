@@ -7,126 +7,143 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 )
 
-// EnvQgo process args to run the file
-type EnvQgo struct {
-	goFile     string
-	goFileIdx  int
-	tempDir    string
-	targetPath string
-	binaryPath string
+func main() {
+	// Override default panic behavior
+	defer func() {
+		if r := recover(); r != nil {
+			log.Fatal(r)
+		}
+	}()
 
-	totalN    int
-	finishedN int
-}
+	i := 0
+	n := 6
 
-func NewEnvQgo() *EnvQgo {
-	return &EnvQgo{
-		finishedN: 0,
-		totalN:    6,
-	}
-}
+	scall := func(sfunc func()) {
+		sptr := reflect.ValueOf(sfunc).Pointer()
+		sfull := runtime.FuncForPC(sptr)
+		log.Printf("[%d/%d] %s starting", i+1, n, sfull.Name())
 
-// 1. Parse and record argument state
-func ParseArgs(env *EnvQgo) {
-	log.Printf("[%d/%d] qgo: Parsing args", env.finishedN+1, env.totalN)
+		sfunc()
 
-	if len(os.Args) < 2 || (len(os.Args) >= 2 && os.Args[1] != "run") {
-		panic("Usage: qgo run [build flags] <file.go> [arguments...]")
+		i = i + 1
 	}
 
+	scall(parseArgs)
+	scall(setupTempWorkspace)
+	defer os.RemoveAll(tempDir)
+	scall(syncSource)
+	scall(prepareDependencies)
+	scall(compile)
+	scall(execute)
+}
+
+var (
+	goFiles         []string
+	goFilesStartIdx int
+	goFilesEndIdx   int
+	tempDir         string
+	targetPaths     []string
+	binaryPath      string
+)
+
+// step: parse command
+func parseArgs() {
+	if len(os.Args) < 2 || os.Args[1] != "run" {
+		panic("Usage: qgo run [build flags] <file.go>(s) [arguments...]")
+	}
+
+	// get the first gofile index
 	for i, arg := range os.Args[2:] {
 		if strings.HasSuffix(arg, ".go") {
-			env.goFile = arg
-			env.goFileIdx = i + 2
+			goFilesStartIdx = i + 2
 			break
 		}
 	}
-	if env.goFile == "" {
-		panic("qgo: no .go files specified")
+
+	// get the last gofile index
+	for i, arg := range os.Args[goFilesStartIdx:] {
+		if strings.HasSuffix(arg, ".go") {
+			goFilesEndIdx = i + goFilesStartIdx
+		} else {
+			break
+		}
 	}
 
-	env.finishedN += 1
+	goFiles = append(goFiles, os.Args[goFilesStartIdx:goFilesEndIdx+1]...)
+
+	if len(goFiles) == 0 {
+		panic("qgo: no .go files specified")
+	}
 }
 
-// 2. Initialize environment
-func SetupTempWorkspace(env *EnvQgo) {
-	log.Printf("[%d/%d] qgo: Setting up temp workspace", env.finishedN+1, env.totalN)
-
+// step: create tempdir
+func setupTempWorkspace() {
 	var err error
-	env.tempDir, err = os.MkdirTemp("", "qgo-*")
+	tempDir, err = os.MkdirTemp("", "qgo-*")
 	if err != nil {
 		panic(err)
 	}
 	// Note: because this is global pl. we clean it up at the end of main
 	// In real-world code, you might also call a cleanup function after execute
-
-	env.finishedN += 1
 }
 
-// 3. Move source code
-func SyncSource(env *EnvQgo) {
-	log.Printf("[%d/%d] qgo: Syncing source", env.finishedN+1, env.totalN)
+// step: copy code
+func syncSource() {
+	for _, goFile := range goFiles {
+		targetPath := filepath.Join(tempDir, filepath.Base(goFile))
+		targetPaths = append(targetPaths, targetPath)
 
-	env.targetPath = filepath.Join(env.tempDir, filepath.Base(env.goFile))
+		source, err := os.Open(goFile)
+		if err != nil {
+			panic(err)
+		}
+		defer source.Close()
 
-	source, err := os.Open(env.goFile)
-	if err != nil {
-		panic(err)
+		destination, err := os.Create(targetPath)
+		if err != nil {
+			panic(err)
+		}
+		defer destination.Close()
+
+		if _, err := io.Copy(destination, source); err != nil {
+			panic(err)
+		}
 	}
-	defer source.Close()
-
-	destination, err := os.Create(env.targetPath)
-	if err != nil {
-		panic(err)
-	}
-	defer destination.Close()
-
-	if _, err := io.Copy(destination, source); err != nil {
-		panic(err)
-	}
-
-	env.finishedN += 1
 }
 
-// 4. Run go mod
-func PrepareDependencies(env *EnvQgo) {
-	log.Printf("[%d/%d] qgo: Preparing dependencies", env.finishedN+1, env.totalN)
-
-	env.runInTemp("go", "mod", "init", "qgo/runtime")
+// step: pull dependencies
+func prepareDependencies() {
+	runInTemp("go", "mod", "init", "qgo/runtime")
 	log.Printf(">> go mod resolving dependencies...")
-	env.runInTemp("go", "mod", "tidy")
-
-	env.finishedN += 1
+	runInTemp("go", "mod", "tidy")
 }
 
-// 5. Compile
-func Compile(env *EnvQgo) {
-	log.Printf("[%d/%d] qgo: Compiling", env.finishedN+1, env.totalN)
-
+// 5. compile
+func compile() {
 	binaryName := "qgo_bin"
 	if filepath.Base(os.Args[0]) == "qgo_bin" {
 		binaryName = "qgo_bin_exec"
 	}
-	env.binaryPath = filepath.Join(env.tempDir, binaryName)
+	binaryPath = filepath.Join(tempDir, binaryName)
 
-	args := []string{"build", "-o", env.binaryPath}
-	args = append(args, os.Args[2:env.goFileIdx]...)
-	args = append(args, filepath.Base(env.goFile))
+	args := []string{"build", "-o", binaryPath}
+	args = append(args, os.Args[2:goFilesStartIdx]...)
+	for _, goFile := range goFiles {
+		args = append(args, filepath.Base(goFile))
+	}
 
-	env.runInTemp("go", args...)
-
-	env.finishedN += 1
+	runInTemp("go", args...)
 }
 
 // 6. Final execution
-func Execute(env *EnvQgo) {
-	log.Printf("[%d/%d] qgo: Executing", env.finishedN+1, env.totalN)
-
-	appArgs := os.Args[env.goFileIdx+1:]
-	cmd := exec.Command(env.binaryPath, appArgs...)
+func execute() {
+	appArgs := os.Args[goFilesEndIdx+1:]
+	cmd := exec.Command(binaryPath, appArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
@@ -137,37 +154,15 @@ func Execute(env *EnvQgo) {
 		// }
 		panic(err)
 	}
-
-	env.finishedN += 1
 }
 
-// Helper: run a command inside the temp directory
-func (env *EnvQgo) runInTemp(name string, args ...string) {
+// helper: run a command inside the temp directory
+func runInTemp(name string, args ...string) {
 	cmd := exec.Command(name, args...)
-	cmd.Dir = env.tempDir
+	cmd.Dir = tempDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		panic(fmt.Sprintf("command failed: %s %s", name, strings.Join(args, " ")))
 	}
-}
-
-func main() {
-	// Override default panic behavior
-	defer func() {
-		if r := recover(); r != nil {
-			log.Fatal(r)
-		}
-	}()
-
-	env := NewEnvQgo()
-
-	// Trigger the logic chain in order
-	ParseArgs(env)
-	SetupTempWorkspace(env)
-	defer os.RemoveAll(env.tempDir) // Clean up at the end
-	SyncSource(env)
-	PrepareDependencies(env)
-	Compile(env)
-	Execute(env)
 }
